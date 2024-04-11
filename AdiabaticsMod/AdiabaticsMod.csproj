@@ -12,6 +12,8 @@
         <AssemblyName>AdiabaticsMod</AssemblyName>
         <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
         <FileAlignment>512</FileAlignment>
+        <GameDir>C:\Users\Stephen\Documents\my games\Stationeers\mods\Adiabatics</GameDir>
+        <LangVersion>7.3</LangVersion>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
         <PlatformTarget>AnyCPU</PlatformTarget>
@@ -42,6 +44,9 @@
         <Reference Include="BepInEx">
           <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Stationeers\BepInEx\core\BepInEx.dll</HintPath>
         </Reference>
+        <Reference Include="Mono.Cecil">
+          <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Stationeers\BepInEx\core\Mono.Cecil.dll</HintPath>
+        </Reference>
         <Reference Include="System"/>
         <Reference Include="System.Core"/>
         <Reference Include="System.Data"/>
@@ -66,5 +71,8 @@
     <Target Name="AfterBuild">
     </Target>
     -->
+    <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+        <Exec Command="xcopy /Y /F &quot;$(TargetPath)&quot; &quot;$(GameDir)&quot;" />
+    </Target>
 
 </Project>
