@@ -76,7 +76,6 @@ namespace StationeersAdiabatics
                     continue;
                 }
                 Debug.Log($"{original.ReflectedType}.{original.Name} Patched");
-                Debug.Log(instruction.ToString());
 
                 yield return new CodeInstruction(SysOpCodes.Ldarg_0);
                 yield return new CodeInstruction(SysOpCodes.Call,
@@ -140,20 +139,32 @@ namespace StationeersAdiabatics
             double work;
             if (inputAtmos.PressureGassesAndLiquidsInPa > outputAtmos.PressureGassesAndLiquidsInPa)
             {
-                Debug.Log("Free Expansion");
+                // Debug.Log("Free Expansion");
                 work = 0f;
             }
-            // else if (inputP0 > outputP0 && inputAtmos.PressureGassesAndLiquidsInPa < outputAtmos.PressureGassesAndLiquidsInPa)
-            // {
-            //     Debug.Log("Partial Free");
-            //     var equiPressure = mix(inputAtmos, outputAtmos, matterStateToMove);
-            //     var compressedVolume = Math.Pow(equiPressure.PressureGassesAndLiquidsInPa / outputAtmos.PressureGassesAndLiquidsInPa, g);
-            //     work = -(Math.Pow(compressedVolume, -g + 1) - Math.Pow(equiPressure.PressureGassesAndLiquidsInPa, -g + 1)) / (-g + 1);
-            //     Debug.Log($"Equipresure {equiPressure.PressureGassesAndLiquidsInPa} g {g}");
-            // }
+            else if (inputP0 > outputP0 && inputAtmos.PressureGassesAndLiquidsInPa < outputAtmos.PressureGassesAndLiquidsInPa)
+            {
+                // Debug.Log("Partial Free");
+                var equiPressure = mix(inputAtmos, outputAtmos, matterStateToMove);
+                
+                // var compressedVolume = Math.Pow(equiPressure.PressureGassesAndLiquidsInPa / outputAtmos.PressureGassesAndLiquidsInPa, g);
+                // work = -(Math.Pow(compressedVolume, -g + 1) - Math.Pow(equiPressure.PressureGassesAndLiquidsInPa, -g + 1)) / (-g + 1);
+                
+                var compressedVolume = (device.OutputSetting / 1000f) *
+                                       Math.Pow(equiPressure.PressureGassesAndLiquidsInPa / outputAtmos.PressureGassesAndLiquidsInPa, g);//Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa, g);
+                var movedMoles = equiPressure.TotalMoles - inputAtmos.TotalMoles;
+                var Cv = inputAtmos.GasMixture.HeatCapacity / inputAtmos.TotalMoles;
+                var squeezeWork = -movedMoles * Cv *
+                                  (equiPressure.Temperature * ((outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume) /
+                                              (equiPressure.PressureGassesAndLiquidsInPa * (device.OutputSetting / 1000f)))
+                                   - inputT0);
+                var pushWork = outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume;
+                work = squeezeWork + pushWork;
+                // Debug.Log($"Equipresure {equiPressure.PressureGassesAndLiquidsInPa} g {g}");
+            }
             else
             {
-                Debug.Log("Total Work");
+                // Debug.Log("Total Work");
                 var compressedVolume = (device.OutputSetting / 1000f) *
                                        Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa, g);//Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa, g);
                 var movedMoles = inputn0 - inputAtmos.TotalMoles;
@@ -165,11 +176,11 @@ namespace StationeersAdiabatics
                 var pushWork = outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume;
                 work = squeezeWork + pushWork;
                 // work = -(float)(Math.Pow(compressedVolume, -g + 1) - Math.Pow(device.OutputSetting, -g + 1)) / (-g + 1);
-                Debug.Log($"squeezeWork {squeezeWork} pushwork {pushWork} compressedVol {compressedVolume} molesMoved {movedMoles} Cv {Cv} g {g}");
-                Debug.Log($"SqueezeWork = {movedMoles} * {Cv} * ({inputT0} * (({outputAtmos.PressureGassesAndLiquidsInPa} * {compressedVolume}) / ({inputP0} * {device.OutputSetting/1000f})) - {inputT0})");
-                Debug.Log($"PushWork =  {outputAtmos.PressureGassesAndLiquidsInPa} * {compressedVolume}");
+                // Debug.Log($"squeezeWork {squeezeWork} pushwork {pushWork} compressedVol {compressedVolume} molesMoved {movedMoles} Cv {Cv} g {g}");
+                // Debug.Log($"SqueezeWork = {movedMoles} * {Cv} * ({inputT0} * (({outputAtmos.PressureGassesAndLiquidsInPa} * {compressedVolume}) / ({inputP0} * {device.OutputSetting/1000f})) - {inputT0})");
+                // Debug.Log($"PushWork =  {outputAtmos.PressureGassesAndLiquidsInPa} * {compressedVolume}");
             }
-            Debug.Log($"Work {work}");
+            // Debug.Log($"Work {work}");
             //var work = -(float)(Math.Pow(compressedVolume, -g + 1) - Math.Pow(inputP0, -g + 1)) / (-g + 1);
 
             // float work;
@@ -192,7 +203,7 @@ namespace StationeersAdiabatics
             //         $"Mix {work} = {inputAtmos.GasMixture.TotalMolesGasses}n * 8.3 * {inputAtmos.Temperature}T * ({inputAtmos.PressureGassesAndLiquidsInPa} - {inputP0})dP / {inputAtmos.PressureGassesAndLiquidsInPa}P");
             // }
 
-            Debug.Log($"Postfix {inputAtmos.PressureGasses} {inputAtmos.PressureGassesAndLiquidsInPa} {inputP0}");
+            // Debug.Log($"Postfix {inputAtmos.PressureGasses} {inputAtmos.PressureGassesAndLiquidsInPa} {inputP0}");
             if (work > 0)
             {
                 outputAtmos.GasMixture.AddEnergy((float)work);
@@ -205,10 +216,10 @@ namespace StationeersAdiabatics
                 // inputAtmos.GasMixture.AddEnergy(-work);
             }
 
-            Debug.Log($"PrePower {device.UsedPower}");
+            // Debug.Log($"PrePower {device.UsedPower}");
             if (!(((float)work).IsDenormalOrZero() || float.IsNaN((float)work)))
                 device.UsedPower = (float)work * 1.1f;
-            Debug.Log($"PostPower {device.UsedPower}");
+            // Debug.Log($"PostPower {device.UsedPower}");
         }
         // [HarmonyPatch]
         // [HarmonyPrefix]
@@ -395,6 +406,47 @@ namespace StationeersAdiabatics
                 atmosphere.GasMixture.HeatCapacity.ToString());
             StringManager.DisplayKeyValue(stringBuilder, GameStrings.HeatExchangerEnergyTransfer,
                 atmosphere.GasMixture.TotalMolesGassesAndLiquids.ToString());
+        }
+    }
+    
+    [HarmonyPatch(typeof(VolumePump))]
+    public class VolumePumpGetUsedPowerPatch
+    {
+        [HarmonyTargetMethods]
+        static IEnumerable<MethodBase> TargetMethods()
+        {
+            var candidateMethods = AccessTools.GetTypesFromAssembly(Assembly.GetAssembly(typeof(DeviceAtmospherics)))
+                .SelectMany(type => type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic));
+            // foreach (var candidate in candidateMethods)
+            // {
+            //     Debug.Log($"Candidate {candidate.ReflectedType} . {candidate.Name}");
+            // }
+            var methods = candidateMethods
+                .Where(
+                    method => method.ReflectedType.Name.Equals("VolumePump") ||
+                              method.ReflectedType.Name.Equals("TurboVolumePump")
+                )
+                .Where(
+                    method =>
+                        method.Name.Equals("GetUsedPower")
+                )
+                .Cast<MethodBase>().Distinct();
+            foreach (var m in methods)
+            {
+                Debug.Log($"Adiabatics Patching    {m.ReflectedType} \t {m.Name}");
+            }
+
+            return methods;
+        }
+        
+        [HarmonyPostfix]
+        public static void PostfixAddMix(ref float __result, VolumePump __instance)
+        {
+            if (__result != 0)
+            {
+                
+                __result = __instance.UsedPower;
+            }
         }
     }
 }
