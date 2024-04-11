@@ -21,8 +21,9 @@ namespace StationeersAdiabatics
         static IEnumerable<MethodBase> TargetMethods()
         {
             var candidateMethods = AccessTools.GetTypesFromAssembly(Assembly.GetAssembly(typeof(DeviceAtmospherics)))
-                .SelectMany(type => type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic));
-            
+                .SelectMany(type => type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public |
+                                                    BindingFlags.NonPublic));
+
             var methods = candidateMethods
                 .Where(
                     method =>
@@ -39,14 +40,12 @@ namespace StationeersAdiabatics
 
             return methods;
         }
-        
+
         [HarmonyTranspiler]
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
         {
-
             foreach (var instruction in instructions)
             {
-
                 if (instruction.opcode != SysOpCodes.Call)
                 {
                     yield return instruction;
@@ -59,6 +58,7 @@ namespace StationeersAdiabatics
                     yield return instruction;
                     continue;
                 }
+
                 Debug.Log($"{original.ReflectedType}.{original.Name} Patched");
 
                 yield return new CodeInstruction(SysOpCodes.Ldarg_0);
@@ -66,7 +66,6 @@ namespace StationeersAdiabatics
                     typeof(MoveAtmosPatch).GetMethod("PatchedMoveVolume",
                         BindingFlags.Static | BindingFlags.NonPublic));
             }
-            
         }
 
         static Atmosphere mix(Atmosphere inputAtmos, Atmosphere outputAtmos, AtmosphereHelper.MatterState matterState)
@@ -97,28 +96,34 @@ namespace StationeersAdiabatics
                 device.UsedPower = 0f;
                 return;
             }
+
             var g = inputAtmos.GasMixture.HeatCapacityRatio();
 
             AtmosphereHelper.MoveVolume(inputAtmos, outputAtmos, volume, matterStateToMove);
-            
-            
+
+
             double work;
             if (inputAtmos.PressureGassesAndLiquidsInPa > outputAtmos.PressureGassesAndLiquidsInPa)
             {
                 work = 0f;
             }
-            else if (inputP0 > outputP0 && inputAtmos.PressureGassesAndLiquidsInPa < outputAtmos.PressureGassesAndLiquidsInPa)
+            else if (inputP0 > outputP0 &&
+                     inputAtmos.PressureGassesAndLiquidsInPa < outputAtmos.PressureGassesAndLiquidsInPa)
             {
                 // Debug.Log("Partial Free");
                 var equiPressure = mix(inputAtmos, outputAtmos, matterStateToMove);
-                
+
                 var compressedVolume = (device.OutputSetting / 1000f) *
-                                       Math.Pow(equiPressure.PressureGassesAndLiquidsInPa / outputAtmos.PressureGassesAndLiquidsInPa, g);//Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa, g);
+                                       Math.Pow(
+                                           equiPressure.PressureGassesAndLiquidsInPa /
+                                           outputAtmos.PressureGassesAndLiquidsInPa,
+                                           g); //Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa, g);
                 var movedMoles = equiPressure.TotalMoles - inputAtmos.TotalMoles;
                 var Cv = inputAtmos.GasMixture.HeatCapacity / inputAtmos.TotalMoles;
                 var squeezeWork = -movedMoles * Cv *
-                                  (equiPressure.Temperature * ((outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume) /
-                                              (equiPressure.PressureGassesAndLiquidsInPa * (device.OutputSetting / 1000f)))
+                                  (equiPressure.Temperature *
+                                   ((outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume) /
+                                    (equiPressure.PressureGassesAndLiquidsInPa * (device.OutputSetting / 1000f)))
                                    - inputT0);
                 var pushWork = outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume;
                 work = squeezeWork + pushWork;
@@ -126,7 +131,8 @@ namespace StationeersAdiabatics
             else
             {
                 var compressedVolume = (device.OutputSetting / 1000f) *
-                                       Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa, g);//Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa, g);
+                                       Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa,
+                                           g); //Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa, g);
                 var movedMoles = inputn0 - inputAtmos.TotalMoles;
                 var Cv = inputAtmos.GasMixture.HeatCapacity / inputAtmos.TotalMoles;
                 var squeezeWork = -movedMoles * Cv *
@@ -136,14 +142,13 @@ namespace StationeersAdiabatics
                 var pushWork = outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume;
                 work = squeezeWork + pushWork;
             }
-            
+
             if (work > 0)
             {
                 outputAtmos.GasMixture.AddEnergy((float)work);
             }
             else
             {
-                
                 outputAtmos.GasMixture.RemoveEnergy(-(float)work);
             }
 
@@ -151,7 +156,7 @@ namespace StationeersAdiabatics
                 device.UsedPower = (float)work * 1.1f;
         }
     }
-    
+
     [HarmonyPatch(typeof(AtmosphericsManager))]
     public class AtmosphericsManagerAddPatch
     {
@@ -170,7 +175,7 @@ namespace StationeersAdiabatics
                 atmosphere.GasMixture.TotalMolesGassesAndLiquids.ToString());
         }
     }
-    
+
     [HarmonyPatch(typeof(VolumePump))]
     public class VolumePumpGetUsedPowerPatch
     {
@@ -178,7 +183,8 @@ namespace StationeersAdiabatics
         static IEnumerable<MethodBase> TargetMethods()
         {
             var candidateMethods = AccessTools.GetTypesFromAssembly(Assembly.GetAssembly(typeof(DeviceAtmospherics)))
-                .SelectMany(type => type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic));
+                .SelectMany(type => type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public |
+                                                    BindingFlags.NonPublic));
 
             var methods = candidateMethods
                 .Where(
@@ -197,13 +203,12 @@ namespace StationeersAdiabatics
 
             return methods;
         }
-        
+
         [HarmonyPostfix]
         public static void PostfixAddMix(ref float __result, VolumePump __instance)
         {
             if (__result != 0)
             {
-                
                 __result = __instance.UsedPower;
             }
         }
