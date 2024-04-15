@@ -30,7 +30,9 @@ namespace StationeersAdiabatics
                         method.Name.Equals("ReleaseToAtmos") ||
                         method.Name.Equals("HandleGasInput") ||
                         method.Name.Equals("MovePropellant") ||
-                        method.Name.Equals("MoveAtmosphere")
+                        method.Name.Equals("MoveAtmosphere") ||
+                        method.Name.Equals("AtmosphericsProcessing") ||
+                        (method.ReflectedType.Name.Equals("PressureRegulator") && method.Name.Equals("OnAtmosphericTick"))
                 )
                 .Cast<MethodBase>().Distinct();
             foreach (var m in methods)
@@ -53,7 +55,8 @@ namespace StationeersAdiabatics
                 }
 
                 var method = (MethodInfo)instruction.operand;
-                if (method.Name != "MoveVolume")
+                if (method.Name != "MoveVolume" ||
+                    method.Name != "MoveRegulatedGas")
                 {
                     yield return instruction;
                     continue;
@@ -63,84 +66,67 @@ namespace StationeersAdiabatics
 
                 yield return new CodeInstruction(SysOpCodes.Ldarg_0);
                 yield return new CodeInstruction(SysOpCodes.Call,
-                    typeof(MoveAtmosPatch).GetMethod("PatchedMoveVolume",
+                    typeof(MoveAtmosPatch).GetMethod("Patched" + method.Name,
                         BindingFlags.Static | BindingFlags.NonPublic));
             }
         }
 
-        static Atmosphere mix(Atmosphere inputAtmos, Atmosphere outputAtmos, AtmosphereHelper.MatterState matterState)
-        {
-            Atmosphere ret = new Atmosphere();
-            ret.Volume = inputAtmos.Volume + outputAtmos.Volume;
-            float num1 = 0.0f;
-            ret.GasMixture.Add(inputAtmos.GasMixture, matterState);
-            float num2 = num1 + inputAtmos.GetVolume(matterState);
-            ret.GasMixture.Add(outputAtmos.GasMixture, matterState);
-            return ret;
-        }
+        
 
-        static void PatchedMoveVolume(Atmosphere inputAtmos,
+        static void PatchedMoveRegulatedGas(
+            Atmosphere inputAtmos,
             Atmosphere outputAtmos,
-            float volume,
-            AtmosphereHelper.MatterState matterStateToMove,
-            DeviceAtmospherics device)
+            float pressurePerTick,
+            float setting,
+            RegulatorType regulatorType,
+            AtmosphereHelper.MatterState movedContent,
+            DeviceAtmospherics device
+    )
+
+    // Atmosphere inputAtmos,
+    //         Atmosphere outputAtmos,
+    //         float volume,
+    //         AtmosphereHelper.MatterState matterStateToMove,
+    //         DeviceAtmospherics device)
         {
             float inputP0 = inputAtmos.PressureGassesAndLiquidsInPa;
             float inputn0 = inputAtmos.TotalMoles;
             float inputT0 = inputAtmos.Temperature;
-            float outputP0 = inputAtmos.PressureGassesAndLiquidsInPa;
-            float outputn0 = inputAtmos.TotalMoles;
+            float outputP0 = outputAtmos.PressureGassesAndLiquidsInPa;
 
             if (inputP0.IsDenormalOrZero())
             {
-                device.UsedPower = 0f;
+                device.UsedPower = 10f;
                 return;
             }
 
             var g = inputAtmos.GasMixture.HeatCapacityRatio();
 
-            AtmosphereHelper.MoveVolume(inputAtmos, outputAtmos, volume, matterStateToMove);
-
+            AtmosphereHelper.MoveRegulatedGas(inputAtmos, outputAtmos, pressurePerTick, setting, regulatorType, movedContent);
+            
+            float inputPf = inputAtmos.PressureGassesAndLiquidsInPa;
+            float inputnf = inputAtmos.TotalMoles;
+            float outputPf = outputAtmos.PressureGassesAndLiquidsInPa;
+            var Cv = inputAtmos.GasMixture.HeatCapacity / inputAtmos.TotalMoles;
 
             double work;
-            if (inputAtmos.PressureGassesAndLiquidsInPa > outputAtmos.PressureGassesAndLiquidsInPa)
+            if (inputPf > outputPf)
             {
                 work = 0f;
             }
             else if (inputP0 > outputP0 &&
-                     inputAtmos.PressureGassesAndLiquidsInPa < outputAtmos.PressureGassesAndLiquidsInPa)
+                     inputPf < outputPf)
             {
-                // Debug.Log("Partial Free");
-                var equiPressure = mix(inputAtmos, outputAtmos, matterStateToMove);
-
-                var compressedVolume = (device.OutputSetting / 1000f) *
-                                       Math.Pow(
-                                           equiPressure.PressureGassesAndLiquidsInPa /
-                                           outputAtmos.PressureGassesAndLiquidsInPa,
-                                           g); //Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa, g);
-                var movedMoles = equiPressure.TotalMoles - inputAtmos.TotalMoles;
-                var Cv = inputAtmos.GasMixture.HeatCapacity / inputAtmos.TotalMoles;
-                var squeezeWork = -movedMoles * Cv *
-                                  (equiPressure.Temperature *
-                                   ((outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume) /
-                                    (equiPressure.PressureGassesAndLiquidsInPa * (device.OutputSetting / 1000f)))
-                                   - inputT0);
-                var pushWork = outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume;
-                work = squeezeWork + pushWork;
+                var equiPressure = Helpers.Mix(inputAtmos, outputAtmos, movedContent);
+                
+                work = Helpers.getCompressiveWork(
+                    equiPressure.PressureGassesAndLiquidsInPa,
+                    equiPressure.TotalMoles, 
+                    equiPressure.Temperature, inputnf, outputPf, g, Cv, device.OutputSetting);
             }
             else
             {
-                var compressedVolume = (device.OutputSetting / 1000f) *
-                                       Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa,
-                                           g); //Math.Pow(inputP0 / outputAtmos.PressureGassesAndLiquidsInPa, g);
-                var movedMoles = inputn0 - inputAtmos.TotalMoles;
-                var Cv = inputAtmos.GasMixture.HeatCapacity / inputAtmos.TotalMoles;
-                var squeezeWork = -movedMoles * Cv *
-                                  (inputT0 * ((outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume) /
-                                              (inputP0 * (device.OutputSetting / 1000f)))
-                                   - inputT0);
-                var pushWork = outputAtmos.PressureGassesAndLiquidsInPa * compressedVolume;
-                work = squeezeWork + pushWork;
+                work = Helpers.getCompressiveWork(inputP0, inputn0, inputT0, inputnf, outputPf, g, Cv, device.OutputSetting);
             }
 
             if (work > 0)
@@ -154,25 +140,73 @@ namespace StationeersAdiabatics
 
             if (!(((float)work).IsDenormalOrZero() || float.IsNaN((float)work)))
                 device.UsedPower = (float)work * 1.1f;
+            else
+            {
+                device.UsedPower = 10f;
+            }
         }
-    }
 
-    [HarmonyPatch(typeof(AtmosphericsManager))]
-    public class AtmosphericsManagerAddPatch
-    {
-        [HarmonyPostfix]
-        [HarmonyPatch("DisplayBasicAtmosphere")]
-        [HarmonyPatch(new Type[] { typeof(Atmosphere), typeof(StringBuilder), typeof(Pipe.ContentType) })]
-        public static void PostfixAddMix(ref StringBuilder stringBuilder, Atmosphere atmosphere)
+        static void PatchedMoveVolume(Atmosphere inputAtmos,
+            Atmosphere outputAtmos,
+            float volume,
+            AtmosphereHelper.MatterState matterStateToMove,
+            DeviceAtmospherics device)
         {
-            StringManager.DisplayKeyValue(stringBuilder, GameStrings.HeatExchangerEnergyTransfer,
-                atmosphere.GasMixture.TotalEnergy.ToString());
-            StringManager.DisplayKeyValue(stringBuilder, GameStrings.HeatExchangerEnergyTransfer,
-                (atmosphere.GasMixture.TotalEnergy / atmosphere.GasMixture.TotalMolesGassesAndLiquids).ToString());
-            StringManager.DisplayKeyValue(stringBuilder, GameStrings.HeatExchangerEnergyTransfer,
-                atmosphere.GasMixture.HeatCapacity.ToString());
-            StringManager.DisplayKeyValue(stringBuilder, GameStrings.HeatExchangerEnergyTransfer,
-                atmosphere.GasMixture.TotalMolesGassesAndLiquids.ToString());
+            float inputP0 = inputAtmos.PressureGassesAndLiquidsInPa;
+            float inputn0 = inputAtmos.TotalMoles;
+            float inputT0 = inputAtmos.Temperature;
+            float outputP0 = outputAtmos.PressureGassesAndLiquidsInPa;
+
+            if (inputP0.IsDenormalOrZero())
+            {
+                device.UsedPower = 10f;
+                return;
+            }
+
+            var g = inputAtmos.GasMixture.HeatCapacityRatio();
+
+            AtmosphereHelper.MoveVolume(inputAtmos, outputAtmos, volume, matterStateToMove);
+            
+            float inputPf = inputAtmos.PressureGassesAndLiquidsInPa;
+            float inputnf = inputAtmos.TotalMoles;
+            float outputPf = outputAtmos.PressureGassesAndLiquidsInPa;
+            var Cv = inputAtmos.GasMixture.HeatCapacity / inputAtmos.TotalMoles;
+
+            double work;
+            if (inputPf > outputPf)
+            {
+                work = 0f;
+            }
+            else if (inputP0 > outputP0 &&
+                     inputPf < outputPf)
+            {
+                var equiPressure = Helpers.Mix(inputAtmos, outputAtmos, matterStateToMove);
+                
+                work = Helpers.getCompressiveWork(
+                    equiPressure.PressureGassesAndLiquidsInPa,
+                    equiPressure.TotalMoles, 
+                    equiPressure.Temperature, inputnf, outputPf, g, Cv, device.OutputSetting);
+            }
+            else
+            {
+                work = Helpers.getCompressiveWork(inputP0, inputn0, inputT0, inputnf, outputPf, g, Cv, device.OutputSetting);
+            }
+
+            if (work > 0)
+            {
+                outputAtmos.GasMixture.AddEnergy((float)work);
+            }
+            else
+            {
+                outputAtmos.GasMixture.RemoveEnergy(-(float)work);
+            }
+
+            if (!(((float)work).IsDenormalOrZero() || float.IsNaN((float)work)))
+                device.UsedPower = (float)work * 1.1f;
+            else
+            {
+                device.UsedPower = 10f;
+            }
         }
     }
 
@@ -205,12 +239,135 @@ namespace StationeersAdiabatics
         }
 
         [HarmonyPostfix]
-        public static void PostfixAddMix(ref float __result, VolumePump __instance)
+        public static void PostfixGetUsedPower(ref float __result, VolumePump __instance)
         {
-            if (__result != 0)
+            if (!__result.IsDenormalOrZero())
             {
-                __result = __instance.UsedPower;
+                __result = 10f + __instance.UsedPower;
             }
         }
     }
+
+    [HarmonyPatch(typeof(ActiveVent))]
+    public class ActiveVentPatch
+    {
+
+        private static float MoveGas(ActiveVent __instance,
+            Atmosphere inputAtmo,
+            Atmosphere outputAtmo,
+            float totalTemperature)
+        {
+            double inputP0 = inputAtmo.PressureGassesAndLiquidsInPa;
+            double inputn0 = inputAtmo.TotalMoles;
+            double inputT0 = inputAtmo.Temperature;
+            double outputP0 = outputAtmo.PressureGassesAndLiquidsInPa;
+            double outputn0 = Math.Max(outputAtmo.TotalMoles, .0000001);
+            var g = outputAtmo.GasMixture.HeatCapacityRatio();
+            var Cv = inputAtmo.GasMixture.HeatCapacity / inputAtmo.TotalMoles;
+
+            var pressureDiff = (inputP0 - outputP0) / 1000;
+            double freeFlow;
+            if (pressureDiff > 0)
+            {
+                var adjustedDiff = __instance.PressurePerTick - pressureDiff / (pressureDiff * pressureDiff);
+                freeFlow = (adjustedDiff * inputAtmo.Volume) / (8.314399719238281 * Math.Max(inputT0, 0.0001f));
+            }
+            else
+            {
+                freeFlow = 0;
+            }
+            
+            double transferMoles = Math.Abs(Helpers.getMolesMovedByWork(inputP0, inputT0, inputP0+pressureDiff, g, Cv, __instance.UsedPower, .5f));;
+            // if (pressureDiff > 0)
+            //     
+            // else
+            //     transferMoles = Math.Abs(Helpers.getMolesMovedByWork(inputP0, inputT0, inputP0+pressureDiff, g, Cv, __instance.UsedPower, .5f));
+            transferMoles += freeFlow;
+            float pressureGasses = outputAtmo.PressureGasses;
+            outputAtmo.Add(inputAtmo.Remove((float)transferMoles, AtmosphereHelper.MatterState.All));
+            outputAtmo.GasMixture.AddEnergy(__instance.UsedPower);
+            return outputAtmo.PressureGasses - pressureGasses;
+            
+            // if (inputP0 > outputP0)
+            // {
+            //     // var pressureDiff = inputP0 - outputP0;
+            //     
+            //     
+            //     float b = (float) (( inputP0 - __instance.InternalPressure)
+            //         *  inputAtmo.Volume 
+            //         / (8.314399719238281 
+            //            *  inputT0));
+            //     float transferMoles = Mathf.Min(
+            //         (float) (Mathf.Clamp(
+            //             Mathf.Min(
+            //                 __instance.PressurePerTick,
+            //                 __instance.ExternalPressure - (float) outputP0
+            //                 ), 
+            //             0.0f, 
+            //             __instance.PressurePerTick) 
+            //             * (double) outputAtmo.Volume / (8.314399719238281 * (double) totalTemperature)
+            //             ),
+            //         b);
+            //     float pressureGasses = outputAtmo.PressureGasses;
+            //     Debug.Log($"free {transferMoles} {b}");
+            //     outputAtmo.Add(inputAtmo.Remove(transferMoles, AtmosphereHelper.MatterState.All));
+            //     return outputAtmo.PressureGasses - pressureGasses;
+            // }
+            // else
+            // {
+            //     float transferMoles = Helpers.getMolesMovedByWork(inputP0, inputT0, outputP0, g, Cv, __instance.UsedPower, .5f);
+            //     float pressureGasses = outputAtmo.PressureGasses;
+            //     outputAtmo.Add(inputAtmo.Remove(transferMoles, AtmosphereHelper.MatterState.All));
+            //     outputAtmo.GasMixture.AddEnergy(__instance.UsedPower);
+            //     float b = (float) (((double) inputP0 - (double) __instance.InternalPressure) * (double) inputAtmo.Volume / (8.314399719238281 * (double) inputT0));
+            //     float transferMolesAlt = Mathf.Min((float) ((double) Mathf.Clamp(Mathf.Min(__instance.PressurePerTick, __instance.ExternalPressure - outputP0), 0.0f, __instance.PressurePerTick) * (double) outputAtmo.Volume / (8.314399719238281 * (double) totalTemperature)), b);
+            //     Debug.Log($"work {transferMoles} / {transferMolesAlt}");
+            //     return outputAtmo.PressureGasses - pressureGasses;
+            // }
+        }
+    
+        [HarmonyPrefix]
+        [HarmonyPatch("PumpGasToPipe")]
+        public static bool PrefixPumpToPipe(ref float __result, ActiveVent __instance,
+            Atmosphere worldAtmosphere,
+            Atmosphere pipeAtmosphere,
+            float totalTemperature)
+        {
+            Debug.Log("PUmpToPipe");
+            __result = MoveGas(__instance, worldAtmosphere, pipeAtmosphere, totalTemperature);
+            return false;
+
+        }
+    
+        [HarmonyPrefix]
+        [HarmonyPatch("PumpGasToWorld")]
+        public static bool PrefixPumpToWorld(ref float __result, ActiveVent __instance,
+            Atmosphere worldAtmosphere,
+            Atmosphere pipeAtmosphere,
+            float totalTemperature)
+        {
+            Debug.Log("PumpToWorld");
+            __result = MoveGas(__instance, pipeAtmosphere, worldAtmosphere, totalTemperature);
+            return false;
+        }
+    }
+
+    // [HarmonyPatch(typeof(AtmosphericsManager))]
+    // public class AtmosphericsManagerAddPatch
+    // {
+    //     [HarmonyPostfix]
+    //     [HarmonyPatch("DisplayBasicAtmosphere")]
+    //     [HarmonyPatch(new Type[] { typeof(Atmosphere), typeof(StringBuilder), typeof(Pipe.ContentType) })]
+    //     public static void PostfixAddMix(ref StringBuilder stringBuilder, Atmosphere atmosphere)
+    //     {
+    //         StringManager.DisplayKeyValue(stringBuilder, GameStrings.HeatExchangerEnergyTransfer,
+    //             atmosphere.GasMixture.TotalEnergy.ToString());
+    //         StringManager.DisplayKeyValue(stringBuilder, GameStrings.HeatExchangerEnergyTransfer,
+    //             (atmosphere.GasMixture.TotalEnergy / atmosphere.GasMixture.TotalMolesGassesAndLiquids).ToString());
+    //         StringManager.DisplayKeyValue(stringBuilder, GameStrings.HeatExchangerEnergyTransfer,
+    //             atmosphere.GasMixture.HeatCapacity.ToString());
+    //         StringManager.DisplayKeyValue(stringBuilder, GameStrings.HeatExchangerEnergyTransfer,
+    //             atmosphere.GasMixture.TotalMolesGassesAndLiquids.ToString());
+    // }
+    // }
 }
