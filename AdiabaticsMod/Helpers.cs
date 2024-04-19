@@ -19,7 +19,10 @@ namespace StationeersAdiabatics
             float pumpInternalVolume)
         {
             var movedMoles = inputn0 - inputnf;
+            if (movedMoles == 0)
+                return 0;
             var ratio = Math.Pow(inputP0 / outputPf, g);
+            Debug.Log($"Ration {ratio} pressure {inputP0} / {outputPf}");
             return (Cv * outputPf * inputT0 * movedMoles * ratio) / inputP0 +
                 outputPf * pumpInternalVolume * ratio - inputT0;
         }
@@ -35,6 +38,8 @@ namespace StationeersAdiabatics
 
             double pumpInternalVolume)
         {
+            if (movedMoles == 0)
+                return 0;
             var ratio = Math.Pow(inputP0 / outputPf, g);
             return (Cv * outputPf * inputT0 * movedMoles * ratio) / inputP0 +
                 outputPf * pumpInternalVolume * ratio - inputT0;

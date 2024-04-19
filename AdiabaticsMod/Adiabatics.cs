@@ -2,9 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using System.Text;
 using Assets.Scripts.Atmospherics;
-using Assets.Scripts.Localization2;
 using Assets.Scripts.Objects.Pipes;
 using Assets.Scripts.Util;
 using HarmonyLib;
@@ -32,7 +30,8 @@ namespace StationeersAdiabatics
                         method.Name.Equals("MovePropellant") ||
                         method.Name.Equals("MoveAtmosphere") ||
                         method.Name.Equals("AtmosphericsProcessing") ||
-                        (method.ReflectedType.Name.Equals("PressureRegulator") && method.Name.Equals("OnAtmosphericTick"))
+                        (method.ReflectedType.Name.Equals("PressureRegulator") &&
+                         method.Name.Equals("OnAtmosphericTick"))
                 )
                 .Cast<MethodBase>().Distinct();
             foreach (var m in methods)
@@ -55,14 +54,14 @@ namespace StationeersAdiabatics
                 }
 
                 var method = (MethodInfo)instruction.operand;
-                if (method.Name != "MoveVolume" ||
+                if (method.Name != "MoveVolume" &&
                     method.Name != "MoveRegulatedGas")
                 {
                     yield return instruction;
                     continue;
                 }
 
-                Debug.Log($"{original.ReflectedType}.{original.Name} Patched");
+                Debug.Log($"{original.ReflectedType}.{original.Name} Patched with ({"Patched" + method.Name})");
 
                 yield return new CodeInstruction(SysOpCodes.Ldarg_0);
                 yield return new CodeInstruction(SysOpCodes.Call,
@@ -71,28 +70,37 @@ namespace StationeersAdiabatics
             }
         }
 
-        
 
         static void PatchedMoveRegulatedGas(
-            Atmosphere inputAtmos,
-            Atmosphere outputAtmos,
+            Atmosphere input,
+            Atmosphere output,
             float pressurePerTick,
             float setting,
             RegulatorType regulatorType,
             AtmosphereHelper.MatterState movedContent,
             DeviceAtmospherics device
-    )
+        )
 
-    // Atmosphere inputAtmos,
-    //         Atmosphere outputAtmos,
-    //         float volume,
-    //         AtmosphereHelper.MatterState matterStateToMove,
-    //         DeviceAtmospherics device)
         {
+            Atmosphere inputAtmos, outputAtmos;
+            if (regulatorType == RegulatorType.Upstream)
+            {
+                inputAtmos = input;
+                outputAtmos = output;
+            }
+            else
+            {
+                inputAtmos = output;
+                outputAtmos = input;
+            }
+
             float inputP0 = inputAtmos.PressureGassesAndLiquidsInPa;
             float inputn0 = inputAtmos.TotalMoles;
             float inputT0 = inputAtmos.Temperature;
             float outputP0 = outputAtmos.PressureGassesAndLiquidsInPa;
+            float pumpVol = 10 / 1000;
+
+            Debug.Log("regulator");
 
             if (inputP0.IsDenormalOrZero())
             {
@@ -102,8 +110,9 @@ namespace StationeersAdiabatics
 
             var g = inputAtmos.GasMixture.HeatCapacityRatio();
 
-            AtmosphereHelper.MoveRegulatedGas(inputAtmos, outputAtmos, pressurePerTick, setting, regulatorType, movedContent);
-            
+            AtmosphereHelper.MoveRegulatedGas(inputAtmos, outputAtmos, pressurePerTick, setting, regulatorType,
+                movedContent);
+
             float inputPf = inputAtmos.PressureGassesAndLiquidsInPa;
             float inputnf = inputAtmos.TotalMoles;
             float outputPf = outputAtmos.PressureGassesAndLiquidsInPa;
@@ -113,21 +122,26 @@ namespace StationeersAdiabatics
             if (inputPf > outputPf)
             {
                 work = 0f;
+                Debug.Log("with Gradient 0");
             }
             else if (inputP0 > outputP0 &&
                      inputPf < outputPf)
             {
                 var equiPressure = Helpers.Mix(inputAtmos, outputAtmos, movedContent);
-                
+
                 work = Helpers.getCompressiveWork(
                     equiPressure.PressureGassesAndLiquidsInPa,
-                    equiPressure.TotalMoles, 
-                    equiPressure.Temperature, inputnf, outputPf, g, Cv, device.OutputSetting);
+                    equiPressure.TotalMoles,
+                    equiPressure.Temperature, inputnf, outputPf, g, Cv, pumpVol);
+                Debug.Log($"Against Gradient at first {work}");
             }
             else
             {
-                work = Helpers.getCompressiveWork(inputP0, inputn0, inputT0, inputnf, outputPf, g, Cv, device.OutputSetting);
-            }
+                work = Helpers.getCompressiveWork(inputP0, inputn0, inputT0, inputnf, outputPf, g, Cv,
+                    pumpVol);
+                Debug.Log($"Against Gradient ({inputP0} -> {outputP0}) {work}  {inputT0}, {inputnf}, {outputPf}, {g}, {Cv}, {pumpVol}"); }
+
+            Debug.Log($"Final {work} J Work by moving {inputn0 - inputnf} Moles");
 
             if (work > 0)
             {
@@ -138,12 +152,12 @@ namespace StationeersAdiabatics
                 outputAtmos.GasMixture.RemoveEnergy(-(float)work);
             }
 
-            if (!(((float)work).IsDenormalOrZero() || float.IsNaN((float)work)))
-                device.UsedPower = (float)work * 1.1f;
-            else
-            {
-                device.UsedPower = 10f;
-            }
+            // if (!(((float)work).IsDenormalOrZero() || float.IsNaN((float)work)))
+            //     device.UsedPower = (float)work * 1.1f;
+            // else
+            // {
+            //     device.UsedPower = 10f;
+            // }
         }
 
         static void PatchedMoveVolume(Atmosphere inputAtmos,
@@ -156,6 +170,7 @@ namespace StationeersAdiabatics
             float inputn0 = inputAtmos.TotalMoles;
             float inputT0 = inputAtmos.Temperature;
             float outputP0 = outputAtmos.PressureGassesAndLiquidsInPa;
+            float pumpVol = device.OutputSetting / 1000;
 
             if (inputP0.IsDenormalOrZero())
             {
@@ -166,7 +181,7 @@ namespace StationeersAdiabatics
             var g = inputAtmos.GasMixture.HeatCapacityRatio();
 
             AtmosphereHelper.MoveVolume(inputAtmos, outputAtmos, volume, matterStateToMove);
-            
+
             float inputPf = inputAtmos.PressureGassesAndLiquidsInPa;
             float inputnf = inputAtmos.TotalMoles;
             float outputPf = outputAtmos.PressureGassesAndLiquidsInPa;
@@ -181,15 +196,16 @@ namespace StationeersAdiabatics
                      inputPf < outputPf)
             {
                 var equiPressure = Helpers.Mix(inputAtmos, outputAtmos, matterStateToMove);
-                
+
                 work = Helpers.getCompressiveWork(
                     equiPressure.PressureGassesAndLiquidsInPa,
-                    equiPressure.TotalMoles, 
-                    equiPressure.Temperature, inputnf, outputPf, g, Cv, device.OutputSetting);
+                    equiPressure.TotalMoles,
+                    equiPressure.Temperature, inputnf, outputPf, g, Cv, pumpVol);
             }
             else
             {
-                work = Helpers.getCompressiveWork(inputP0, inputn0, inputT0, inputnf, outputPf, g, Cv, device.OutputSetting);
+                work = Helpers.getCompressiveWork(inputP0, inputn0, inputT0, inputnf, outputPf, g, Cv,
+                    pumpVol);
             }
 
             if (work > 0)
@@ -251,7 +267,6 @@ namespace StationeersAdiabatics
     [HarmonyPatch(typeof(ActiveVent))]
     public class ActiveVentPatch
     {
-
         private static float MoveGas(ActiveVent __instance,
             Atmosphere inputAtmo,
             Atmosphere outputAtmo,
@@ -276,8 +291,10 @@ namespace StationeersAdiabatics
             {
                 freeFlow = 0;
             }
-            
-            double transferMoles = Math.Abs(Helpers.getMolesMovedByWork(inputP0, inputT0, inputP0+pressureDiff, g, Cv, __instance.UsedPower, .5f));;
+
+            double transferMoles = Math.Abs(Helpers.getMolesMovedByWork(inputP0, inputT0, inputP0 + pressureDiff, g, Cv,
+                __instance.UsedPower, .5f));
+            ;
             // if (pressureDiff > 0)
             //     
             // else
@@ -287,7 +304,7 @@ namespace StationeersAdiabatics
             outputAtmo.Add(inputAtmo.Remove((float)transferMoles, AtmosphereHelper.MatterState.All));
             outputAtmo.GasMixture.AddEnergy(__instance.UsedPower);
             return outputAtmo.PressureGasses - pressureGasses;
-            
+
             // if (inputP0 > outputP0)
             // {
             //     // var pressureDiff = inputP0 - outputP0;
@@ -325,7 +342,7 @@ namespace StationeersAdiabatics
             //     return outputAtmo.PressureGasses - pressureGasses;
             // }
         }
-    
+
         [HarmonyPrefix]
         [HarmonyPatch("PumpGasToPipe")]
         public static bool PrefixPumpToPipe(ref float __result, ActiveVent __instance,
@@ -336,9 +353,8 @@ namespace StationeersAdiabatics
             Debug.Log("PUmpToPipe");
             __result = MoveGas(__instance, worldAtmosphere, pipeAtmosphere, totalTemperature);
             return false;
-
         }
-    
+
         [HarmonyPrefix]
         [HarmonyPatch("PumpGasToWorld")]
         public static bool PrefixPumpToWorld(ref float __result, ActiveVent __instance,
